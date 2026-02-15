@@ -379,9 +379,13 @@ def main():
         ctype = school['centre_type']
         centre_counts[ctype] = centre_counts.get(ctype, 0) + 1
     
-    st.sidebar.success(f"Found {len(school_links)} examination centres")
+    # Sort school links - prioritize School Candidates (S) over Private Candidates (P)
+    school_links_sorted = sorted(school_links, key=lambda x: (0 if x['centre_type'] == 'School Candidates' else 1, x['code']))
+    
+    st.sidebar.success(f"Found {len(school_links_sorted)} examination centres")
     st.sidebar.write(f"- School Candidates (S): {centre_counts.get('School Candidates', 0)}")
     st.sidebar.write(f"- Private Candidates (P): {centre_counts.get('Private Candidates', 0)}")
+    st.sidebar.info("📌 School candidates (S) are prioritized in the list")
     
     # Centre type filter
     centre_type_filter = st.sidebar.selectbox(
@@ -389,11 +393,11 @@ def main():
         ["All", "School Candidates (S)", "Private Candidates (P)"]
     )
     
-    # Filter schools based on centre type
+    # Filter schools based on centre type (use sorted list)
     if centre_type_filter != "All":
-        filtered_schools = [s for s in school_links if s['centre_type'] == centre_type_filter]
+        filtered_schools = [s for s in school_links_sorted if s['centre_type'] == centre_type_filter]
     else:
-        filtered_schools = school_links
+        filtered_schools = school_links_sorted
     
     # Analysis options
     analysis_mode = st.sidebar.radio(
@@ -587,9 +591,20 @@ def display_top_performers_enhanced(data):
         'Total Passed': d.get('total_passed', 0)
     } for d in data])
     
+    # Ensure numeric columns
+    df['GPA'] = pd.to_numeric(df['GPA'], errors='coerce')
+    df['Total Students'] = pd.to_numeric(df['Total Students'], errors='coerce').fillna(0)
+    df['Div I'] = pd.to_numeric(df['Div I'], errors='coerce').fillna(0)
+    df['Total Passed'] = pd.to_numeric(df['Total Passed'], errors='coerce').fillna(0)
+    
     # Calculate rates
-    df['Div I Rate (%)'] = (df['Div I'] / df['Total Students'] * 100).fillna(0)
-    df['Pass Rate (%)'] = (df['Total Passed'] / df['Total Students'] * 100).fillna(0)
+    df['Div I Rate (%)'] = ((df['Div I'] / df['Total Students']) * 100).fillna(0)
+    df['Pass Rate (%)'] = ((df['Total Passed'] / df['Total Students']) * 100).fillna(0)
+    
+    # Check if dataframe is empty
+    if len(df) == 0:
+        st.warning("No centre data available for analysis.")
+        return
     
     # Filters
     col1, col2, col3 = st.columns(3)
@@ -610,19 +625,42 @@ def display_top_performers_enhanced(data):
     if type_filter != "All":
         filtered = filtered[filtered['Type'] == type_filter]
     
-    # Sort
+    # Check if filtered dataframe is empty
+    if len(filtered) == 0:
+        st.warning("No centres found with the selected filters. Please adjust your filters.")
+        return
+    
+    # Sort and handle NaN values
     if ranking_by == "GPA":
-        filtered = filtered.dropna(subset=['GPA'])
-        top = filtered.nsmallest(50, 'GPA')
+        # For GPA, lower is better - remove NaN values
+        filtered_valid = filtered.dropna(subset=['GPA'])
+        if len(filtered_valid) == 0:
+            st.warning("No centres have valid GPA data with the selected filters.")
+            return
+        top = filtered_valid.nsmallest(min(50, len(filtered_valid)), 'GPA')
     else:
-        top = filtered.nlargest(50, ranking_by)
+        # For percentages, higher is better
+        filtered['temp_col'] = filtered[ranking_by]
+        top = filtered.nlargest(min(50, len(filtered)), 'temp_col')
+        top = top.drop('temp_col', axis=1)
     
     # Display
     st.subheader(f"Top {len(top)} Centres by {ranking_by}")
     
-    display_cols = ['Centre Code', 'Centre Name', 'Centre Type', 'School Level', 'Region', 
-                    'GPA', 'Div I Rate (%)', 'Pass Rate (%)', 'Total Students']
-    st.dataframe(top[display_cols].reset_index(drop=True), use_container_width=True, height=600)
+    # Format display
+    display_df = top[['Centre Code', 'Centre Name', 'Centre Type', 'School Level', 'Region', 
+                      'GPA', 'Div I Rate (%)', 'Pass Rate (%)', 'Total Students']].copy()
+    
+    # Format columns for display
+    display_df['GPA'] = display_df['GPA'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else 'N/A')
+    display_df['Div I Rate (%)'] = display_df['Div I Rate (%)'].apply(lambda x: f"{x:.1f}%")
+    display_df['Pass Rate (%)'] = display_df['Pass Rate (%)'].apply(lambda x: f"{x:.1f}%")
+    display_df['Total Students'] = display_df['Total Students'].astype(int)
+    
+    display_df = display_df.reset_index(drop=True)
+    display_df.index += 1
+    
+    st.dataframe(display_df, use_container_width=True, height=600)
 
 def display_regional_analysis_enhanced(data):
     """Enhanced regional analysis"""
@@ -636,6 +674,11 @@ def display_regional_analysis_enhanced(data):
         'Div I': d['divisions'].get('T', {}).get('I', 0)
     } for d in data])
     
+    # Ensure numeric types
+    df['GPA'] = pd.to_numeric(df['GPA'], errors='coerce')
+    df['Students'] = pd.to_numeric(df['Students'], errors='coerce').fillna(0)
+    df['Div I'] = pd.to_numeric(df['Div I'], errors='coerce').fillna(0)
+    
     regional_stats = df.groupby('Region').agg({
         'Region': 'count',
         'Students': 'sum',
@@ -643,16 +686,21 @@ def display_regional_analysis_enhanced(data):
         'Div I': 'sum'
     }).rename(columns={'Region': 'Centres'})
     
-    regional_stats = regional_stats.sort_values('GPA', ascending=True)
+    regional_stats = regional_stats.sort_values('GPA', ascending=True, na_position='last')
     
     st.dataframe(regional_stats, use_container_width=True)
     
-    # Visualization
-    fig = px.bar(regional_stats.reset_index(), x='Region', y='GPA',
-                 title='Average GPA by Region',
-                 color='GPA', color_continuous_scale='Viridis')
-    fig.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+    # Visualization - only plot regions with valid GPA
+    plot_data = regional_stats[regional_stats['GPA'] > 0].reset_index()
+    
+    if len(plot_data) > 0:
+        fig = px.bar(plot_data, x='Region', y='GPA',
+                     title='Average GPA by Region',
+                     color='GPA', color_continuous_scale='Viridis')
+        fig.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No valid GPA data available for visualization")
 
 def display_subject_analysis_enhanced(data):
     """Enhanced subject analysis"""
@@ -760,25 +808,45 @@ def display_comparative_analysis_enhanced(data):
         'Students': d['total_students']
     } for d in data])
     
+    # Ensure numeric types
+    df['GPA'] = pd.to_numeric(df['GPA'], errors='coerce')
+    df['Students'] = pd.to_numeric(df['Students'], errors='coerce').fillna(0)
+    
     # Centre Type Comparison
     st.subheader("School vs Private Candidates Performance")
     centre_comp = df.groupby('Centre Type').agg({
         'Centre Type': 'count',
-        'GPA': lambda x: x.dropna().mean(),
+        'GPA': lambda x: x.dropna().mean() if len(x.dropna()) > 0 else 0,
         'Students': 'sum'
     }).rename(columns={'Centre Type': 'Count'})
     
+    centre_comp['GPA'] = centre_comp['GPA'].round(2)
     st.dataframe(centre_comp, use_container_width=True)
+    
+    # Visualization
+    if centre_comp['GPA'].sum() > 0:
+        fig = px.bar(centre_comp.reset_index(), x='Centre Type', y='GPA',
+                     title='Average GPA by Centre Type',
+                     color='GPA', color_continuous_scale='RdYlGn_r')
+        st.plotly_chart(fig, use_container_width=True)
     
     # School Level Comparison
     st.subheader("Secondary School vs High School")
     level_comp = df.groupby('School Level').agg({
         'School Level': 'count',
-        'GPA': lambda x: x.dropna().mean(),
+        'GPA': lambda x: x.dropna().mean() if len(x.dropna()) > 0 else 0,
         'Students': 'sum'
     }).rename(columns={'School Level': 'Count'})
     
+    level_comp['GPA'] = level_comp['GPA'].round(2)
     st.dataframe(level_comp, use_container_width=True)
+    
+    # Visualization
+    if level_comp['GPA'].sum() > 0:
+        fig = px.bar(level_comp.reset_index(), x='School Level', y='GPA',
+                     title='Average GPA by School Level',
+                     color='GPA', color_continuous_scale='RdYlGn_r')
+        st.plotly_chart(fig, use_container_width=True)
 
 def display_download_options_enhanced(data):
     """Enhanced download options"""
