@@ -1,0 +1,42 @@
+MIT License
+
+Copyright (c) 2025 NECTA Analysis Dashboard
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+DISCLAIMER:
+This software is provided for educational and informational purposes only.
+All examination data is sourced from the National Examinations Council of 
+Tanzania (NECTA) official website. The data remains the property of NECTA.
+
+The authors and contributors of this software:
+- Do not guarantee the accuracy or completeness of the data
+- Are not affiliated with or endorsed by NECTA
+- Are not responsible for any decisions made based on this analysis
+- Recommend verifying all data with official NECTA sources
+
+Users of this software should:
+- Use the tool responsibly and ethically
+- Respect NECTA's terms of service and rate limits
+- Verify critical information with official sources
+- Not use the data for commercial purposes without proper authorization
+
+By using this software, you acknowledge and agree to these terms.
