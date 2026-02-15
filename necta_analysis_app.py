@@ -374,7 +374,7 @@ def extract_school_data_enhanced(url, max_retries=2):
             return None
     
     return None
-        soup = BeautifulSoup(response.content, 'html.parser')
+    soup = BeautifulSoup(response.content, 'html.parser')
         
         # Extract school code from URL
         school_code = url.split('/')[-1].replace('.htm', '').upper()
