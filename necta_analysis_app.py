@@ -373,8 +373,8 @@ def extract_school_data_enhanced(url, max_retries=2):
             # Log the error but don't crash
             return None
     
-    return None
-    soup = BeautifulSoup(response.content, 'html.parser')
+        return None
+        soup = BeautifulSoup(response.content, 'html.parser')
         
         # Extract school code from URL
         school_code = url.split('/')[-1].replace('.htm', '').upper()
