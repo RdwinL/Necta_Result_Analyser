@@ -297,7 +297,7 @@ def display_analysis(data):
         'School Name': d['name'],
         'Code': d['code'],
         'Region': d['region'],
-        'GPA': d['gpa'],
+        'GPA': d['gpa'] if d['gpa'] is not None else None,
         'Type': d['type'],
         'Ownership': d['ownership'],
         'Total Students': d['total_students'],
@@ -308,12 +308,20 @@ def display_analysis(data):
         'Div 0': d['divisions'].get('T', {}).get('0', 0),
     } for d in data])
     
-    # Calculate pass rate (Div I-IV)
+    # Ensure numeric columns are properly typed
+    numeric_columns = ['GPA', 'Total Students', 'Div I', 'Div II', 'Div III', 'Div IV', 'Div 0']
+    for col in numeric_columns:
+        df_schools[col] = pd.to_numeric(df_schools[col], errors='coerce')
+    
+    # Calculate pass rate (Div I-IV) - handle division by zero
     df_schools['Pass Rate (%)'] = ((df_schools['Div I'] + df_schools['Div II'] + 
                                      df_schools['Div III'] + df_schools['Div IV']) / 
-                                    df_schools['Total Students'] * 100).fillna(0)
+                                    df_schools['Total Students'] * 100)
+    df_schools['Pass Rate (%)'] = df_schools['Pass Rate (%)'].fillna(0)
     
-    df_schools['Div I Rate (%)'] = (df_schools['Div I'] / df_schools['Total Students'] * 100).fillna(0)
+    # Calculate Div I rate - handle division by zero
+    df_schools['Div I Rate (%)'] = (df_schools['Div I'] / df_schools['Total Students'] * 100)
+    df_schools['Div I Rate (%)'] = df_schools['Div I Rate (%)'].fillna(0)
     
     # Tabs for different views
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -350,18 +358,23 @@ def display_overview(df_schools, raw_data):
         st.metric("Total Schools", len(df_schools))
     
     with col2:
-        st.metric("Total Students", f"{df_schools['Total Students'].sum():,}")
+        total_students = df_schools['Total Students'].sum()
+        st.metric("Total Students", f"{int(total_students):,}")
     
     with col3:
-        avg_gpa = df_schools['GPA'].mean()
-        st.metric("Average GPA", f"{avg_gpa:.2f}")
+        # Handle NaN values in GPA calculation
+        avg_gpa = df_schools['GPA'].dropna().mean()
+        if pd.notna(avg_gpa):
+            st.metric("Average GPA", f"{avg_gpa:.2f}")
+        else:
+            st.metric("Average GPA", "N/A")
     
     with col4:
         avg_pass_rate = df_schools['Pass Rate (%)'].mean()
         st.metric("Avg Pass Rate", f"{avg_pass_rate:.1f}%")
     
     with col5:
-        div_i_students = df_schools['Div I'].sum()
+        div_i_students = int(df_schools['Div I'].sum())
         st.metric("Division I Students", f"{div_i_students:,}")
     
     st.markdown("---")
@@ -431,8 +444,21 @@ def display_top_performers(df_schools):
     if filter_ownership != "All":
         filtered_df = filtered_df[filtered_df['Ownership'] == filter_ownership]
     
-    # Sort by selected criteria
-    top_schools = filtered_df.nlargest(50, ranking_criteria)
+    # Handle None/NaN values in ranking criteria
+    # Fill NaN values with a large number for GPA (higher is worse) or 0 for percentages
+    if ranking_criteria == "GPA":
+        filtered_df[ranking_criteria] = pd.to_numeric(filtered_df[ranking_criteria], errors='coerce')
+        filtered_df = filtered_df.dropna(subset=[ranking_criteria])
+        # For GPA, lower is better, so we'll use nsmallest instead
+        top_schools = filtered_df.nsmallest(50, ranking_criteria)
+    else:
+        filtered_df[ranking_criteria] = pd.to_numeric(filtered_df[ranking_criteria], errors='coerce').fillna(0)
+        top_schools = filtered_df.nlargest(50, ranking_criteria)
+    
+    # Check if we have any results
+    if len(top_schools) == 0:
+        st.warning("No schools found with the selected filters. Please adjust your filters.")
+        return
     
     # Display top 10 in metrics
     st.subheader(f"Top 10 Schools by {ranking_criteria}")
@@ -466,11 +492,11 @@ def display_regional_analysis(df_schools):
     """Display regional performance analysis"""
     st.header("📍 Regional Performance Analysis")
     
-    # Regional summary
+    # Regional summary - drop rows with NaN in critical columns for aggregation
     regional_stats = df_schools.groupby('Region').agg({
         'School Name': 'count',
         'Total Students': 'sum',
-        'GPA': 'mean',
+        'GPA': lambda x: x.dropna().mean() if len(x.dropna()) > 0 else 0,
         'Pass Rate (%)': 'mean',
         'Div I Rate (%)': 'mean',
         'Div I': 'sum'
@@ -478,7 +504,9 @@ def display_regional_analysis(df_schools):
     
     regional_stats.columns = ['Number of Schools', 'Total Students', 'Avg GPA', 
                               'Avg Pass Rate (%)', 'Avg Div I Rate (%)', 'Total Div I']
-    regional_stats = regional_stats.sort_values('Avg GPA', ascending=False)
+    
+    # Sort by Avg GPA, handling NaN values
+    regional_stats = regional_stats.sort_values('Avg GPA', ascending=True, na_position='last')
     
     # Display table
     st.subheader("Regional Performance Summary")
@@ -611,7 +639,7 @@ def display_comparative_analysis(df_schools):
     type_comparison = df_schools.groupby('Type').agg({
         'School Name': 'count',
         'Total Students': 'sum',
-        'GPA': 'mean',
+        'GPA': lambda x: x.dropna().mean() if len(x.dropna()) > 0 else 0,
         'Pass Rate (%)': 'mean',
         'Div I Rate (%)': 'mean'
     }).round(2)
@@ -637,7 +665,7 @@ def display_comparative_analysis(df_schools):
     ownership_comparison = df_schools.groupby('Ownership').agg({
         'School Name': 'count',
         'Total Students': 'sum',
-        'GPA': 'mean',
+        'GPA': lambda x: x.dropna().mean() if len(x.dropna()) > 0 else 0,
         'Pass Rate (%)': 'mean',
         'Div I Rate (%)': 'mean'
     }).round(2)
