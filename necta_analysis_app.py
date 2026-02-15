@@ -140,11 +140,240 @@ def extract_candidate_results(soup):
     
     return candidates
 
-@st.cache_data(ttl=3600)
-def extract_school_data_enhanced(url):
+@st.cache_data(ttl=3600, show_spinner=False)
+def extract_school_data_enhanced(url, max_retries=2):
     """Enhanced extraction with candidate-level data and all table structures"""
-    try:
-        response = requests.get(url, timeout=10)
+    
+    for attempt in range(max_retries):
+        try:
+            # Set a reasonable timeout
+            response = requests.get(url, timeout=15)
+            
+            if response.status_code != 200:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Extract school code from URL
+            school_code = url.split('/')[-1].replace('.htm', '').upper()
+            
+            # Extract school name
+            school_name_tag = soup.find('h3')
+            school_name = school_name_tag.get_text(strip=True) if school_name_tag else "Unknown"
+            
+            # Determine school level
+            school_level = determine_school_level(school_name)
+            
+            # Determine centre type from code
+            if school_code.startswith('P'):
+                centre_type = "Private Candidates"
+            elif school_code.startswith('S'):
+                centre_type = "School Candidates"
+            else:
+                centre_type = "Other"
+            
+            # Extract all text content for searching
+            page_text = soup.get_text()
+            
+            # Extract Region
+            region = "Unknown"
+            region_patterns = [
+                r'EXAMINATION CENTRE REGION\s*[|\s]*([A-Z\s]+)',
+                r'REGION\s*[|\s]*([A-Z\s]+)',
+                r'CENTRE REGION\s*[|\s]*([A-Z\s]+)'
+            ]
+            for pattern in region_patterns:
+                region_match = re.search(pattern, page_text, re.IGNORECASE)
+                if region_match:
+                    region = region_match.group(1).strip()
+                    break
+            
+            # Extract GPA
+            gpa = None
+            gpa_patterns = [
+                r'EXAMINATION CENTRE GPA\s*[|\s]*([\d.]+)',
+                r'GPA\s*[|\s]*([\d.]+)',
+                r'CENTRE GPA\s*[|\s]*([\d.]+)'
+            ]
+            for pattern in gpa_patterns:
+                gpa_match = re.search(pattern, page_text)
+                if gpa_match:
+                    try:
+                        gpa = float(gpa_match.group(1))
+                        break
+                    except ValueError:
+                        continue
+            
+            # Extract Total Passed Candidates
+            total_passed = None
+            passed_patterns = [
+                r'TOTAL PASSED CANDIDATES\s*[|\s]*(\d+)',
+                r'PASSED CANDIDATES\s*[|\s]*(\d+)'
+            ]
+            for pattern in passed_patterns:
+                passed_match = re.search(pattern, page_text)
+                if passed_match:
+                    try:
+                        total_passed = int(passed_match.group(1))
+                        break
+                    except ValueError:
+                        continue
+            
+            # Determine school type from name
+            name_lower = school_name.lower()
+            if "girls" in name_lower or "girl's" in name_lower:
+                school_type = "Girls"
+            elif "boys" in name_lower or "boy's" in name_lower:
+                school_type = "Boys"
+            else:
+                school_type = "Mixed"
+            
+            # Determine ownership
+            ownership = "Private" if any(word in name_lower for word in ['seminary', 'islamic', 'christian', 'catholic', 'private']) else "Government"
+            
+            # Extract Division Performance Summary (the first table)
+            div_summary = {}
+            tables = soup.find_all('table')
+            
+            for table in tables:
+                table_text = table.get_text().upper()
+                if any(indicator in table_text for indicator in ['DIVISION PERFORMANCE SUMMARY', 'SEX', 'DIV']):
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cols = row.find_all(['td', 'th'])
+                        if len(cols) >= 6:
+                            sex = cols[0].get_text(strip=True)
+                            if sex in ['F', 'M', 'T']:
+                                try:
+                                    div_summary[sex] = {
+                                        'I': int(cols[1].get_text(strip=True) or 0),
+                                        'II': int(cols[2].get_text(strip=True) or 0),
+                                        'III': int(cols[3].get_text(strip=True) or 0),
+                                        'IV': int(cols[4].get_text(strip=True) or 0),
+                                        '0': int(cols[5].get_text(strip=True) or 0)
+                                    }
+                                except (ValueError, IndexError):
+                                    continue
+                    break
+            
+            # Extract Centre Division Performance (different structure)
+            centre_division_perf = {}
+            for table in tables:
+                table_text = table.get_text().upper()
+                if 'EXAMINATION CENTRE DIVISION PERFORMANCE' in table_text or 'CENTRE DIVISION' in table_text:
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cols = row.find_all(['td', 'th'])
+                        if len(cols) >= 11:
+                            first_val = cols[0].get_text(strip=True)
+                            if first_val.isdigit():
+                                try:
+                                    centre_division_perf = {
+                                        'REGIST': int(cols[0].get_text(strip=True) or 0),
+                                        'ABSENT': int(cols[1].get_text(strip=True) or 0),
+                                        'SAT': int(cols[2].get_text(strip=True) or 0),
+                                        'WITHHELD': int(cols[3].get_text(strip=True) or 0),
+                                        'NO-CA': int(cols[4].get_text(strip=True) or 0),
+                                        'CLEAN': int(cols[5].get_text(strip=True) or 0),
+                                        'DIV_I': int(cols[6].get_text(strip=True) or 0),
+                                        'DIV_II': int(cols[7].get_text(strip=True) or 0),
+                                        'DIV_III': int(cols[8].get_text(strip=True) or 0),
+                                        'DIV_IV': int(cols[9].get_text(strip=True) or 0),
+                                        'DIV_0': int(cols[10].get_text(strip=True) or 0)
+                                    }
+                                except (ValueError, IndexError):
+                                    continue
+                    break
+            
+            # Extract Subject Performance
+            subjects_performance = []
+            for table in tables:
+                if 'SUBJECTS PERFORMANCE' in table.get_text().upper():
+                    rows = table.find_all('tr')
+                    for row in rows[1:]:
+                        cols = row.find_all(['td', 'th'])
+                        if len(cols) >= 9:
+                            try:
+                                code = cols[0].get_text(strip=True)
+                                if code.isdigit():
+                                    subject_name = cols[1].get_text(strip=True)
+                                    reg = int(cols[2].get_text(strip=True) or 0)
+                                    sat = int(cols[3].get_text(strip=True) or 0)
+                                    no_ca = int(cols[4].get_text(strip=True) or 0)
+                                    whd = int(cols[5].get_text(strip=True) or 0)
+                                    clean = int(cols[6].get_text(strip=True) or 0)
+                                    passed = int(cols[7].get_text(strip=True) or 0)
+                                    subject_gpa_text = cols[8].get_text(strip=True)
+                                    subject_gpa = float(subject_gpa_text.split()[0]) if subject_gpa_text else 0
+                                    competency = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+                                    
+                                    subjects_performance.append({
+                                        'code': code,
+                                        'subject': subject_name,
+                                        'registered': reg,
+                                        'sat': sat,
+                                        'no_ca': no_ca,
+                                        'withheld': whd,
+                                        'clean': clean,
+                                        'passed': passed,
+                                        'gpa': subject_gpa,
+                                        'competency_level': competency,
+                                        'pass_rate': (passed / sat * 100) if sat > 0 else 0
+                                    })
+                            except (ValueError, IndexError, ZeroDivisionError):
+                                continue
+                    break
+            
+            # Extract candidate-level results (limit to avoid memory issues)
+            candidates = extract_candidate_results(soup)
+            # Limit candidates to first 500 to save memory
+            if len(candidates) > 500:
+                candidates = candidates[:500]
+            
+            # Calculate total students
+            total_students = 0
+            if 'T' in div_summary:
+                total_students = sum(div_summary['T'].values())
+            elif centre_division_perf:
+                total_students = centre_division_perf.get('SAT', 0)
+            elif candidates:
+                total_students = len(candidates)
+            
+            return {
+                'code': school_code,
+                'name': school_name,
+                'centre_type': centre_type,
+                'school_level': school_level,
+                'region': region,
+                'gpa': gpa,
+                'type': school_type,
+                'ownership': ownership,
+                'total_passed': total_passed,
+                'divisions': div_summary,
+                'centre_division_perf': centre_division_perf,
+                'subjects': subjects_performance,
+                'candidates': candidates,
+                'total_students': total_students
+            }
+            
+        except requests.Timeout:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None
+        except requests.RequestException as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None
+        except Exception as e:
+            # Log the error but don't crash
+            return None
+    
+    return None
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Extract school code from URL
@@ -362,6 +591,21 @@ def main():
     
     st.info("🎓 **Enhanced Version**: Now includes Private Candidates (P), School Candidates (S), candidate-level data, and detailed performance metrics!")
     
+    # Show current progress if analysis is running
+    if 'analysis_data' in st.session_state and 'processed_codes' in st.session_state:
+        current_data = st.session_state.get('analysis_data', [])
+        if len(current_data) > 0:
+            st.success(f"""
+            📊 **Current Analysis Status**
+            - Centres analyzed: {len(current_data)}
+            - Data in memory: {len(st.session_state.get('processed_codes', set()))} unique centres
+            - Click "View Results" below to see current data
+            """)
+            
+            if st.button("📈 View Current Results"):
+                # Force display of current results
+                pass  # Will fall through to display_analysis_enhanced below
+    
     # Sidebar
     st.sidebar.title("🔍 Navigation & Filters")
     
@@ -413,7 +657,25 @@ def main():
         
     elif analysis_mode == "Full Analysis (All Centres)":
         schools_to_analyze = filtered_schools
-        st.sidebar.warning(f"This will analyze {len(filtered_schools)} centres. May take several minutes.")
+        st.sidebar.warning(f"""
+        ⚠️ **Full Analysis Mode**
+        - Total centres: {len(filtered_schools)}
+        - Estimated time: {len(filtered_schools) * 0.5 / 60:.0f}-{len(filtered_schools) / 60:.0f} minutes
+        - Memory intensive operation
+        
+        💡 **Tips:**
+        - Keep browser tab open
+        - Don't refresh the page
+        - Progress is saved every 10 centres
+        - Can resume if interrupted
+        """)
+        
+        # Add batch processing option
+        use_batch = st.sidebar.checkbox("Use Batch Processing (Recommended)", value=True)
+        if use_batch:
+            batch_size = st.sidebar.slider("Batch Size", 100, 500, 200, 50)
+            schools_to_analyze = filtered_schools[:batch_size]
+            st.sidebar.info(f"Processing first {batch_size} centres. Run again to process more.")
         
     else:  # Custom Selection
         search_term = st.sidebar.text_input("Search Centre Name", "")
@@ -437,49 +699,116 @@ def main():
             st.warning("Please select at least one centre to analyze")
             return
         
+        # Initialize or retrieve existing data
+        if 'analysis_data' not in st.session_state:
+            st.session_state['analysis_data'] = []
+        if 'processed_codes' not in st.session_state:
+            st.session_state['processed_codes'] = set()
+        
+        # Check if this is a continuation
+        existing_data = st.session_state.get('analysis_data', [])
+        processed_codes = st.session_state.get('processed_codes', set())
+        
+        # Filter out already processed schools
+        schools_to_process = [s for s in schools_to_analyze if s['code'] not in processed_codes]
+        
+        if len(schools_to_process) == 0 and len(existing_data) > 0:
+            st.info(f"All {len(schools_to_analyze)} centres already analyzed! Showing results.")
+            return
+        
         # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
         stats_text = st.empty()
         
-        all_data = []
+        all_data = list(existing_data)  # Start with existing data
         failed_schools = []
-        successful_count = 0
+        successful_count = len(existing_data)
+        total_to_process = len(schools_to_process)
         
-        for idx, school in enumerate(schools_to_analyze):
-            status_text.text(f"Analyzing: {school['name']} ({idx+1}/{len(schools_to_analyze)})")
-            progress_bar.progress((idx + 1) / len(schools_to_analyze))
+        # Process in chunks to avoid memory issues
+        CHUNK_SIZE = 50
+        SAVE_INTERVAL = 10  # Save every 10 schools
+        
+        try:
+            for idx, school in enumerate(schools_to_process):
+                try:
+                    current_progress = (idx + 1) / total_to_process
+                    status_text.text(f"Analyzing: {school['name']} ({idx+1}/{total_to_process})")
+                    progress_bar.progress(current_progress)
+                    
+                    # Extract data with timeout protection
+                    data = extract_school_data_enhanced(school['url'])
+                    
+                    if data:
+                        data['url'] = school['url']
+                        all_data.append(data)
+                        processed_codes.add(school['code'])
+                        successful_count += 1
+                        
+                        # Save progress periodically
+                        if idx > 0 and idx % SAVE_INTERVAL == 0:
+                            st.session_state['analysis_data'] = all_data
+                            st.session_state['processed_codes'] = processed_codes
+                        
+                        stats_text.success(f"✓ Extracted: {successful_count} | Failed: {len(failed_schools)} | Progress: {idx+1}/{total_to_process}")
+                    else:
+                        failed_schools.append(school['name'])
+                        stats_text.warning(f"✓ Extracted: {successful_count} | Failed: {len(failed_schools)} | Progress: {idx+1}/{total_to_process}")
+                    
+                    # Rate limiting
+                    time.sleep(0.3)
+                    
+                    # Memory management - clear cache every 100 schools
+                    if idx > 0 and idx % 100 == 0:
+                        st.cache_data.clear()
+                        
+                except Exception as e:
+                    failed_schools.append(f"{school['name']} (Error: {str(e)[:50]})")
+                    stats_text.error(f"Error processing {school['name']}: {str(e)[:100]}")
+                    continue
+                
+        except Exception as e:
+            st.error(f"Critical error during analysis: {str(e)}")
+            st.info(f"Partial results available: {successful_count} centres analyzed")
+        
+        finally:
+            # Always save progress
+            st.session_state['analysis_data'] = all_data
+            st.session_state['processed_codes'] = processed_codes
             
-            data = extract_school_data_enhanced(school['url'])
-            if data:
-                data['url'] = school['url']
-                all_data.append(data)
-                successful_count += 1
-                stats_text.success(f"✓ Extracted: {successful_count} | Failed: {len(failed_schools)}")
-            else:
-                failed_schools.append(school['name'])
-                stats_text.warning(f"✓ Extracted: {successful_count} | Failed: {len(failed_schools)}")
-            
-            time.sleep(0.5)
+            progress_bar.empty()
+            status_text.empty()
+            stats_text.empty()
         
-        progress_bar.empty()
-        status_text.empty()
-        stats_text.empty()
-        
+        # Display results
         if failed_schools:
             with st.expander(f"⚠️ Failed to extract {len(failed_schools)} centres - Click to see"):
-                for school in failed_schools:
+                for school in failed_schools[:100]:  # Limit display
                     st.text(f"• {school}")
+                if len(failed_schools) > 100:
+                    st.text(f"... and {len(failed_schools) - 100} more")
         
         if not all_data:
             st.error("No data extracted. Please try again.")
             return
         
-        # Store in session state
-        st.session_state['analysis_data'] = all_data
+        # Display summary
         total_students = sum(d['total_students'] for d in all_data)
         total_candidates = sum(len(d.get('candidates', [])) for d in all_data)
-        st.success(f"✅ Successfully analyzed {len(all_data)} centres with {total_students:,} total students and {total_candidates:,} individual candidate records!")
+        
+        st.success(f"""
+        ✅ **Analysis Complete!**
+        - Successfully analyzed: {len(all_data)} centres
+        - Total students: {total_students:,}
+        - Individual candidate records: {total_candidates:,}
+        - Failed: {len(failed_schools)}
+        """)
+        
+        # Add option to clear and restart
+        if st.sidebar.button("🔄 Clear Data & Restart"):
+            st.session_state.clear()
+            st.rerun()
     
     # Display analysis if data exists
     if 'analysis_data' in st.session_state:
