@@ -443,13 +443,18 @@ def display_top_performers(df_schools):
     """Display top performing schools with various filters"""
     st.header("🏆 Top Performing Schools")
     
+    # Check if dataframe is empty
+    if len(df_schools) == 0:
+        st.warning("No school data available for analysis.")
+        return
+    
     # Filter options
     col1, col2, col3 = st.columns(3)
     
     with col1:
         ranking_criteria = st.selectbox(
             "Rank By",
-            ["GPA", "Division I Rate (%)", "Pass Rate (%)"]
+            ["GPA", "Div I Rate (%)", "Pass Rate (%)"]
         )
     
     with col2:
@@ -471,16 +476,39 @@ def display_top_performers(df_schools):
     if filter_ownership != "All":
         filtered_df = filtered_df[filtered_df['Ownership'] == filter_ownership]
     
+    # Check if filtered dataframe is empty
+    if len(filtered_df) == 0:
+        st.warning("No schools found with the selected filters. Please adjust your filters.")
+        return
+    
+    # Map user-friendly names to actual column names
+    column_mapping = {
+        "GPA": "GPA",
+        "Div I Rate (%)": "Div I Rate (%)",
+        "Pass Rate (%)": "Pass Rate (%)"
+    }
+    
+    actual_column = column_mapping.get(ranking_criteria, ranking_criteria)
+    
+    # Check if column exists
+    if actual_column not in filtered_df.columns:
+        st.error(f"Column '{actual_column}' not found in data. Available columns: {list(filtered_df.columns)}")
+        return
+    
     # Handle None/NaN values in ranking criteria
-    # Fill NaN values with a large number for GPA (higher is worse) or 0 for percentages
     if ranking_criteria == "GPA":
-        filtered_df[ranking_criteria] = pd.to_numeric(filtered_df[ranking_criteria], errors='coerce')
-        filtered_df = filtered_df.dropna(subset=[ranking_criteria])
-        # For GPA, lower is better, so we'll use nsmallest instead
-        top_schools = filtered_df.nsmallest(50, ranking_criteria)
+        # For GPA, lower is better
+        filtered_df[actual_column] = pd.to_numeric(filtered_df[actual_column], errors='coerce')
+        # Remove rows with NaN GPA
+        filtered_df = filtered_df.dropna(subset=[actual_column])
+        if len(filtered_df) == 0:
+            st.warning("No schools have valid GPA data with the selected filters.")
+            return
+        top_schools = filtered_df.nsmallest(min(50, len(filtered_df)), actual_column)
     else:
-        filtered_df[ranking_criteria] = pd.to_numeric(filtered_df[ranking_criteria], errors='coerce').fillna(0)
-        top_schools = filtered_df.nlargest(50, ranking_criteria)
+        # For percentages, higher is better
+        filtered_df[actual_column] = pd.to_numeric(filtered_df[actual_column], errors='coerce').fillna(0)
+        top_schools = filtered_df.nlargest(min(50, len(filtered_df)), actual_column)
     
     # Check if we have any results
     if len(top_schools) == 0:
@@ -490,30 +518,46 @@ def display_top_performers(df_schools):
     # Display top 10 in metrics
     st.subheader(f"Top 10 Schools by {ranking_criteria}")
     
-    for idx, row in top_schools.head(10).iterrows():
-        with st.expander(f"#{top_schools.index.get_loc(idx) + 1} - {row['School Name']} ({row['Region']})"):
+    for idx in range(min(10, len(top_schools))):
+        row = top_schools.iloc[idx]
+        rank = idx + 1
+        with st.expander(f"#{rank} - {row['School Name']} ({row['Region']})"):
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("GPA", f"{row['GPA']:.2f}")
+            gpa_val = row['GPA'] if pd.notna(row['GPA']) else 'N/A'
+            col1.metric("GPA", f"{gpa_val:.2f}" if isinstance(gpa_val, (int, float)) else gpa_val)
             col2.metric("Div I Rate", f"{row['Div I Rate (%)']:.1f}%")
             col3.metric("Pass Rate", f"{row['Pass Rate (%)']:.1f}%")
             col4.metric("Students", int(row['Total Students']))
     
     # Full ranking table
-    st.subheader(f"Top 50 Schools Ranking")
+    st.subheader(f"Top {len(top_schools)} Schools Ranking")
     display_df = top_schools[['School Name', 'Region', 'Type', 'Ownership', 'GPA', 
                                'Div I Rate (%)', 'Pass Rate (%)', 'Total Students']].reset_index(drop=True)
     display_df.index += 1
+    
+    # Format the display
+    display_df['GPA'] = display_df['GPA'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else 'N/A')
+    display_df['Div I Rate (%)'] = display_df['Div I Rate (%)'].apply(lambda x: f"{x:.1f}%")
+    display_df['Pass Rate (%)'] = display_df['Pass Rate (%)'].apply(lambda x: f"{x:.1f}%")
+    display_df['Total Students'] = display_df['Total Students'].astype(int)
+    
     st.dataframe(display_df, use_container_width=True, height=600)
     
     # Visualization
     st.subheader("Performance Comparison")
-    fig = px.scatter(top_schools, x='GPA', y='Div I Rate (%)', 
-                     size='Total Students', color='Type',
-                     hover_data=['School Name', 'Region'],
-                     title='GPA vs Division I Rate',
-                     labels={'GPA': 'School GPA', 'Div I Rate (%)': 'Division I Rate (%)'},
-                     color_discrete_sequence=px.colors.qualitative.Bold)
-    st.plotly_chart(fig, use_container_width=True)
+    
+    # Only create scatter plot if we have valid GPA data
+    plot_df = top_schools.dropna(subset=['GPA'])
+    if len(plot_df) > 0:
+        fig = px.scatter(plot_df, x='GPA', y='Div I Rate (%)', 
+                         size='Total Students', color='Type',
+                         hover_data=['School Name', 'Region'],
+                         title='GPA vs Division I Rate',
+                         labels={'GPA': 'School GPA', 'Div I Rate (%)': 'Division I Rate (%)'},
+                         color_discrete_sequence=px.colors.qualitative.Bold)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Not enough data with valid GPA values to create comparison chart.")
 
 def display_regional_analysis(df_schools):
     """Display regional performance analysis"""
