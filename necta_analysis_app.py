@@ -89,11 +89,11 @@ def extract_school_data(url):
         for table in info_tables:
             text = table.get_text()
             if "REGION" in text:
-                region_match = re.search(r'REGION\s*\|\s*([A-Z\s]+)', text)
+                region_match = re.search(r'REGION\s*[|\s]+([A-Z\s]+)', text)
                 if region_match:
                     region = region_match.group(1).strip()
             if "GPA" in text:
-                gpa_match = re.search(r'GPA\s*\|\s*([\d.]+)', text)
+                gpa_match = re.search(r'GPA\s*[|\s]+([\d.]+)', text)
                 if gpa_match:
                     gpa = float(gpa_match.group(1))
         
@@ -112,25 +112,41 @@ def extract_school_data(url):
         # Extract division summary
         div_summary = {}
         div_table = None
+        
+        # Look for division table with more flexible matching
         for table in soup.find_all('table'):
-            if 'DIVISION PERFORMANCE SUMMARY' in table.get_text():
-                div_table = table
-                break
+            table_text = table.get_text().upper()
+            # Check for various division table indicators
+            if any(indicator in table_text for indicator in ['DIVISION PERFORMANCE', 'DIV', 'SEX']):
+                # Check if this table has the right structure (should have M, F, T rows)
+                rows = table.find_all('tr')
+                if len(rows) > 1:
+                    # Check if any row has M, F, or T
+                    for row in rows:
+                        cols = row.find_all(['td', 'th'])
+                        if cols and cols[0].get_text(strip=True) in ['M', 'F', 'T']:
+                            div_table = table
+                            break
+                if div_table:
+                    break
         
         if div_table:
             rows = div_table.find_all('tr')
-            for row in rows[1:]:
-                cols = row.find_all('td')
+            for row in rows:
+                cols = row.find_all(['td', 'th'])  # Include both td and th
                 if len(cols) >= 6:
                     sex = cols[0].get_text(strip=True)
                     if sex in ['F', 'M', 'T']:
-                        div_summary[sex] = {
-                            'I': int(cols[1].get_text(strip=True) or 0),
-                            'II': int(cols[2].get_text(strip=True) or 0),
-                            'III': int(cols[3].get_text(strip=True) or 0),
-                            'IV': int(cols[4].get_text(strip=True) or 0),
-                            '0': int(cols[5].get_text(strip=True) or 0)
-                        }
+                        try:
+                            div_summary[sex] = {
+                                'I': int(cols[1].get_text(strip=True) or 0),
+                                'II': int(cols[2].get_text(strip=True) or 0),
+                                'III': int(cols[3].get_text(strip=True) or 0),
+                                'IV': int(cols[4].get_text(strip=True) or 0),
+                                '0': int(cols[5].get_text(strip=True) or 0)
+                            }
+                        except (ValueError, IndexError):
+                            continue
         
         # Extract subject performance
         subjects_performance = []
@@ -142,7 +158,7 @@ def extract_school_data(url):
         
         if subjects_table:
             rows = subjects_table.find_all('tr')
-            for row in rows[1:]:
+            for row in rows[1:]:  # Skip header
                 cols = row.find_all('td')
                 if len(cols) >= 8:
                     try:
@@ -150,7 +166,8 @@ def extract_school_data(url):
                         subject = cols[1].get_text(strip=True)
                         sat = int(cols[3].get_text(strip=True) or 0)
                         passed = int(cols[6].get_text(strip=True) or 0)
-                        subject_gpa = float(cols[7].get_text(strip=True) or 0)
+                        subject_gpa_text = cols[7].get_text(strip=True)
+                        subject_gpa = float(subject_gpa_text.split()[0] if subject_gpa_text else 0)
                         
                         subjects_performance.append({
                             'code': code,
@@ -160,15 +177,17 @@ def extract_school_data(url):
                             'gpa': subject_gpa,
                             'pass_rate': (passed / sat * 100) if sat > 0 else 0
                         })
-                    except:
+                    except (ValueError, IndexError, ZeroDivisionError):
                         continue
         
         # Calculate total students
-        total_students = div_summary.get('T', {}).get('I', 0) + \
-                        div_summary.get('T', {}).get('II', 0) + \
-                        div_summary.get('T', {}).get('III', 0) + \
-                        div_summary.get('T', {}).get('IV', 0) + \
-                        div_summary.get('T', {}).get('0', 0)
+        total_students = 0
+        if 'T' in div_summary:
+            total_students = (div_summary['T'].get('I', 0) + 
+                            div_summary['T'].get('II', 0) + 
+                            div_summary['T'].get('III', 0) + 
+                            div_summary['T'].get('IV', 0) + 
+                            div_summary['T'].get('0', 0))
         
         return {
             'name': school_name,
@@ -181,7 +200,7 @@ def extract_school_data(url):
             'total_students': total_students
         }
     except Exception as e:
-        st.error(f"Error extracting data from {url}: {e}")
+        # Return None to indicate failure, will be caught by calling function
         return None
 
 def categorize_subject(subject_name):
@@ -252,9 +271,11 @@ def main():
         # Progress tracking
         progress_bar = st.progress(0)
         status_text = st.empty()
+        stats_text = st.empty()
         
         all_data = []
         failed_schools = []
+        successful_count = 0
         
         for idx, school in enumerate(schools_to_analyze):
             status_text.text(f"Analyzing: {school['name']} ({idx+1}/{len(schools_to_analyze)})")
@@ -265,25 +286,31 @@ def main():
                 data['code'] = school['code']
                 data['url'] = school['url']
                 all_data.append(data)
+                successful_count += 1
+                stats_text.success(f"✓ Successfully extracted: {successful_count} | Failed: {len(failed_schools)}")
             else:
                 failed_schools.append(school['name'])
+                stats_text.warning(f"✓ Successfully extracted: {successful_count} | Failed: {len(failed_schools)}")
             
             # Rate limiting
             time.sleep(0.5)
         
         progress_bar.empty()
         status_text.empty()
+        stats_text.empty()
         
         if failed_schools:
-            st.warning(f"Failed to extract data from {len(failed_schools)} schools")
+            with st.expander(f"⚠️ Failed to extract data from {len(failed_schools)} schools - Click to see list"):
+                for school in failed_schools:
+                    st.text(f"• {school}")
         
         if not all_data:
-            st.error("No data extracted. Please try again.")
+            st.error("No data extracted. Please try again or select different schools.")
             return
         
         # Store in session state
         st.session_state['analysis_data'] = all_data
-        st.success(f"✅ Successfully analyzed {len(all_data)} schools!")
+        st.success(f"✅ Successfully analyzed {len(all_data)} schools with {sum(d['total_students'] for d in all_data):,} total students!")
     
     # Display analysis if data exists
     if 'analysis_data' in st.session_state:
@@ -521,7 +548,7 @@ def display_regional_analysis(df_schools):
                      title='Average GPA by Region',
                      color='Avg GPA',
                      color_continuous_scale='Viridis')
-        fig.update_xaxis(tickangle=-45)
+        fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
@@ -530,7 +557,7 @@ def display_regional_analysis(df_schools):
                      title='Average Pass Rate by Region',
                      color='Avg Pass Rate (%)',
                      color_continuous_scale='Blues')
-        fig.update_xaxis(tickangle=-45)
+        fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
     
     # School distribution by region
